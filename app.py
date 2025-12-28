@@ -1,74 +1,128 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 
-# تهيئة الصفحة
+# -----------------------------
+# Page Config
+# -----------------------------
 st.set_page_config(
-    page_title="تحليل مبيعات/مخزون الموديلات",
+    page_title="Bag Model Color Analysis",
+    page_icon="🎒",
     layout="wide"
 )
 
-# 1. تحميل ومعالجة البيانات (يفترض أن ملف processed_sales_summary.csv موجود)
-# للحصول على هذا الملف، يجب تشغيل كود تحليل البيانات الذي قدمته لك في البداية وحفظ الناتج.
+st.title("🎒 Bag Model Color Summary Dashboard")
+
+# -----------------------------
+# Load Data
+# -----------------------------
 @st.cache_data
 def load_data():
-    try:
-        # قراءة ملف البيانات المُعالَج
-        df = pd.read_csv("processed_sales_summary.csv")
-        # التأكد من تحويل عمود العدد الكلي إلى عدد صحيح
-        df['العدد الكلي'] = df['العدد الكلي'].astype(int)
-        return df
-    except FileNotFoundError:
-        st.error("لم يتم العثور على ملف 'processed_sales_summary.csv'. يرجى التأكد من رفعه في نفس المجلد.")
-        return pd.DataFrame()
+    raw_df = pd.read_csv("processed_sales_summary.csv")
 
-df_summary = load_data()
+    # First row contains model + color info
+    header_row = raw_df.iloc[0]
+    data_df = raw_df.iloc[1:].copy()
 
-# التأكد من أن DataFrame ليس فارغًا قبل المتابعة
-if not df_summary.empty:
-    
-    # 2. إنشاء القائمة المنسدلة (Dropdown/Selectbox)
-    
-    # استخراج قائمة الموديلات الفريدة لملء القائمة المنسدلة
-    model_list = sorted(df_summary['الموديل'].unique().tolist())
-    
-    # عنوان التطبيق
-    st.title("تحليل إجمالي الألوان لكل موديل")
-    
-    # اختيار الموديل من القائمة المنسدلة
-    selected_model = st.selectbox(
-        "اختر الموديل لعرض التفاصيل:",
-        options=model_list
+    # Rename columns using header row
+    data_df.columns = header_row
+    data_df.rename(columns={data_df.columns[0]: "Month"}, inplace=True)
+
+    # Drop empty columns
+    data_df = data_df.dropna(axis=1, how="all")
+
+    # Melt to long format
+    melted = data_df.melt(
+        id_vars="Month",
+        var_name="Model_Color",
+        value_name="Quantity"
     )
-    
-    # 3. عرض الجدول والعدد الكلي
-    if selected_model:
-        # تصفية البيانات للموديل المختار
-        df_model = df_summary[df_summary['الموديل'] == selected_model].copy()
-        
-        # حساب العدد الكلي للموديل
-        total_quantity = df_model['العدد الكلي'].sum()
-        
-        st.header(f"نتائج الموديل: {selected_model}")
-        
-        # عرض الجدول (يحتوي على اللون والعدد الكلي)
-        st.subheader("جدول عدد كل لون")
-        
-        # إظهار الأعمدة المطلوبة فقط (اللون والعدد الكلي)
-        df_display = df_model[['اللون', 'العدد الكلي']].sort_values(by='العدد الكلي', ascending=False)
-        st.dataframe(df_display, use_container_width=True)
-        
-        # عرض العدد الكلي للموديل
-        st.markdown(f"**العدد الكلي لموديل {selected_model} بجميع ألوانه:** **<span style='color:green; font-size: 24px;'>{total_quantity:,}</span>**", unsafe_allow_html=True)
-        
-        # (اختياري) عرض مخطط دائري (Pie Chart) لتوزيع الألوان
-        st.subheader("توزيع الألوان في الموديل")
-        
-        # إنشاء المخطط الدائري باستخدام Streamlit
-        # لا نحتاج إلى Altair هنا، يمكن لـ Streamlit إنشاء المخطط مباشرة
-        st.bar_chart(df_display.set_index('اللون'))
-        
-        st.caption("ملاحظة: التمثيل البياني هو لشريط يعرض الكميات. يمكنك استخدام مكتبات مثل Plotly لإنشاء مخطط دائري أكثر تفصيلاً.")
 
-# إذا كان DataFrame فارغًا
-else:
-    st.info("الرجاء التأكد من تحميل البيانات بشكل صحيح لبدء التحليل.")
+    # Clean data
+    melted["Quantity"] = pd.to_numeric(melted["Quantity"], errors="coerce").fillna(0)
+
+    # Split Model and Color
+    melted["Model"] = melted["Model_Color"].str.split().str[0]
+    melted["Color"] = melted["Model_Color"].str.replace(melted["Model"] + " ", "", regex=True)
+
+    return melted
+
+df = load_data()
+
+# -----------------------------
+# Sidebar Filters
+# -----------------------------
+st.sidebar.header("🔍 Filters")
+
+models = sorted(df["Model"].unique())
+selected_model = st.sidebar.selectbox("Select Model", models)
+
+# -----------------------------
+# Filter Data
+# -----------------------------
+model_df = df[df["Model"] == selected_model]
+
+color_summary = (
+    model_df.groupby("Color", as_index=False)["Quantity"]
+    .sum()
+    .sort_values(by="Quantity", ascending=False)
+)
+
+total_quantity = int(color_summary["Quantity"].sum())
+
+# -----------------------------
+# KPI Section
+# -----------------------------
+col1, col2 = st.columns(2)
+
+col1.metric(
+    label=f"Total Quantity for Model {selected_model}",
+    value=f"{total_quantity:,}"
+)
+
+col2.metric(
+    label="Number of Colors",
+    value=color_summary.shape[0]
+)
+
+# -----------------------------
+# Table
+# -----------------------------
+st.subheader("📊 Quantity per Color")
+st.dataframe(
+    color_summary,
+    use_container_width=True
+)
+
+# -----------------------------
+# Chart
+# -----------------------------
+st.subheader("🎨 Color Distribution")
+
+fig = px.bar(
+    color_summary,
+    x="Color",
+    y="Quantity",
+    text="Quantity",
+)
+
+fig.update_layout(
+    xaxis_title="Color",
+    yaxis_title="Quantity",
+    showlegend=False
+)
+
+st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------------
+# Download Option
+# -----------------------------
+st.subheader("⬇️ Download Data")
+
+csv = color_summary.to_csv(index=False).encode("utf-8")
+st.download_button(
+    label="Download Color Summary as CSV",
+    data=csv,
+    file_name=f"{selected_model}_color_summary.csv",
+    mime="text/csv"
+)
